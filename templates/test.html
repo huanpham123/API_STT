@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Transcribe Audio</title>
+</head>
+<body>
+  <h1>Upload & Transcribe</h1>
+  <form id="form" enctype="multipart/form-data">
+    <input type="file" name="file" accept="audio/*" required>
+    <button>Upload</button>
+  </form>
+  <p id="msg"></p>
+  <pre id="text" style="background:#f0f0f0;padding:1em;"></pre>
+
+  <script>
+    const f = document.getElementById('form'),
+          msg = document.getElementById('msg'),
+          out = document.getElementById('text');
+
+    f.addEventListener('submit', async e => {
+      e.preventDefault();
+      msg.textContent = 'Đang xử lý…';
+      out.textContent = '';
+      const res = await fetch('/upload', { method:'POST', body: new FormData(f) });
+      const j = await res.json();
+      if (!res.ok) {
+        msg.textContent = 'Lỗi: ' + j.error;
+      } else {
+        msg.textContent = 'Hoàn thành';
+        out.textContent = j.transcript;
+      }
+    });
+  </script>
+</body>
+</html>
