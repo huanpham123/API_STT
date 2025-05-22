@@ -1,9 +1,14 @@
 from flask import Flask, request, render_template, jsonify
-import os, requests
-from werkzeug.utils import secure_filename
+import requests
+import os
 
 app = Flask(__name__)
-os.makedirs('uploads', exist_ok=True)
+
+# Sử dụng thư mục /tmp để lưu trữ tệp tạm thời
+UPLOAD_FOLDER = '/tmp'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+DEEPGRAM_API_KEY = "95e26fe061960fecb8fc532883f92af0641b89d0"
 
 @app.route('/')
 def index():
@@ -11,32 +16,45 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_audio():
-    # kiểm tra có file gửi lên không
-    if 'file' not in request.files or request.files['file'].filename == '':
-        return jsonify({'error': 'Vui lòng chọn file âm thanh'}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'Không có file âm thanh'}), 400
 
     f = request.files['file']
-    fn = secure_filename(f.filename)
-    save_path = os.path.join('uploads', fn)
-    f.save(save_path)
+    if f.filename == '':
+        return jsonify({'error': 'Chưa chọn file'}), 400
 
-    # gọi Deepgram
-    dg = requests.post(
-        'https://api.deepgram.com/v1/listen',
-        headers={
-            'Authorization': 'Token 95e26fe061960fecb8fc532883f92af0641b89d0',
-            'Content-Type': f'audio/{fn.rsplit(".",1)[-1]}'
-        },
-        data=open(save_path, 'rb'),
-        params={'language': 'vi', 'model': 'nova-2'}
-    )
+    filename = f.filename
+    path = os.path.join(UPLOAD_FOLDER, filename)
+    f.save(path)
 
-    if dg.status_code != 200:
-        return jsonify({'error': f'Deepgram lỗi: {dg.text}'}), dg.status_code
+    # Gửi nội dung file lên Deepgram
+    with open(path, 'rb') as audio_file:
+        dg_resp = requests.post(
+            'https://api.deepgram.com/v1/listen',
+            headers={
+                'Authorization': f'Token {DEEPGRAM_API_KEY}',
+                'Content-Type': f'audio/{filename.rsplit('.', 1)[-1]}'
+            },
+            data=audio_file,
+            params={
+                'language': 'vi',
+                'model': 'nova-2'
+            }
+        )
 
-    # trích transcript từ response
-    transcript = dg.json()['results']['channels'][0]['alternatives'][0]['transcript']
-    return jsonify({'transcript': transcript})
+    if dg_resp.status_code != 200:
+        return jsonify({'error': 'Deepgram lỗi: ' + dg_resp.text}), dg_resp.status_code
+
+    result = dg_resp.json()
+    transcript = result.get('results', {})\
+                       .get('channels', [{}])[0]\
+                       .get('alternatives', [{}])[0]\
+                       .get('transcript', '')
+
+    return jsonify({
+        'message': 'File đã upload và chuyển thành văn bản',
+        'transcript': transcript
+    })
 
 if __name__ == '__main__':
     app.run(debug=True)
