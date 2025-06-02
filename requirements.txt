@@ -1,3 +1,4 @@
 Flask
 requests
-werkzeug
+SpeechRecognition
+python-dotenv
