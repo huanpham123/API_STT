@@ -1,0 +1,41 @@
+app = "STTapi"   # ← Thay bằng tên ứng dụng thật của bạn trên Fly.io
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  FLASK_ENV = "production"
+
+[experimental]
+  allowed_public_ports = [8080]
+  auto_rename = true
+
+[services]
+  # Health check định kỳ (Fly.io sẽ gọi để kiểm tra container còn healthy)
+  [[services.http_checks]]
+    interval = 10000        # Mỗi 10 giây kiểm tra một lần
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/ping"
+    protocol = "http"
+    timeout = 2000          # 2 giây
+    tls_skip_verify = false
+
+  # Khai báo port HTTP public
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  # Khai báo port HTTPS public (Fly tự cấp SSL)
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "requests"
+    hard_limit = 25
+    soft_limit = 20
+
+[scale]
+  min_machines = 1
+  max_machines = 1
