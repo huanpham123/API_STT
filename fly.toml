@@ -1,4 +1,4 @@
-app = "STTapi"   # ← Thay bằng tên ứng dụng thật của bạn trên Fly.io
+app = "flask-stt-server"   # ← Thay bằng tên ứng dụng thật của bạn trên Fly.io
 
 [build]
   dockerfile = "Dockerfile"
