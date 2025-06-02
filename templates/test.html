@@ -1,35 +1,256 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-  <meta charset="UTF-8">
-  <title>Transcribe Audio</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Speech to Text - Fly.io</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    #controls {
+      margin-bottom: 20px;
+    }
+    #record-btn {
+      padding: 10px 20px;
+      font-size: 16px;
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #record-btn.recording {
+      background-color: #d9534f;
+    }
+    #record-btn:disabled {
+      background-color: #aaa;
+      cursor: not-allowed;
+    }
+    #transcript {
+      margin-top: 10px;
+      font-size: 18px;
+      color: #333;
+    }
+    #status-bar {
+      margin-top: 20px;
+      padding: 10px;
+      border-top: 1px solid #ccc;
+    }
+    #connection-status {
+      display: flex;
+      align-items: center;
+      margin-bottom: 5px;
+    }
+    .status-indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 8px;
+      background-color: orange; /* khi đang connecting */
+    }
+    .status-active {
+      background-color: green;
+    }
+    .status-inactive {
+      background-color: red;
+    }
+    .interim {
+      color: #555;
+      font-style: italic;
+    }
+    .error-message {
+      color: red;
+      margin-top: 10px;
+    }
+  </style>
 </head>
 <body>
-  <h1>Upload & Transcribe</h1>
-  <form id="form" enctype="multipart/form-data">
-    <input type="file" name="file" accept="audio/*" required>
-    <button>Upload</button>
-  </form>
-  <p id="msg"></p>
-  <pre id="text" style="background:#f0f0f0;padding:1em;"></pre>
+  <h1>Speech to Text – Fly.io Integration</h1>
+
+  <div id="controls">
+    <button id="record-btn" disabled>
+      <svg class="mic-icon" viewBox="0 0 24 24" width="24" height="24">
+        <path fill="currentColor"
+          d="M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z" />
+      </svg>
+      Bắt đầu nói
+    </button>
+  </div>
+
+  <div id="transcript">
+    Kết quả chuyển đổi giọng nói sẽ hiển thị tại đây...
+  </div>
+
+  <div id="status-bar">
+    <div id="connection-status">
+      <span class="status-indicator status-connecting"></span>
+      <span id="status-text">Đang kiểm tra server...</span>
+    </div>
+    <div id="server-stats">Ping: -- | Pool: -- | Threads: --</div>
+  </div>
 
   <script>
-    const f = document.getElementById('form'),
-          msg = document.getElementById('msg'),
-          out = document.getElementById('text');
+    // --- Cấu hình interval ---
+    const PING_INTERVAL = 300000; // 5 phút
+    const WAKEUP_INTERVAL = 1740000; // 29 phút
+    const AGGRESSIVE_PING_INTERVAL = 60000; // 1 phút khi mất kết nối
 
-    f.addEventListener('submit', async e => {
-      e.preventDefault();
-      msg.textContent = 'Đang xử lý…';
-      out.textContent = '';
-      const res = await fetch('/upload', { method:'POST', body: new FormData(f) });
-      const j = await res.json();
-      if (!res.ok) {
-        msg.textContent = 'Lỗi: ' + j.error;
+    let isRecording = false;
+    let recognition;
+    let serverReady = false;
+    let pingIntervalId = null;
+    let wakeupIntervalId = null;
+    let consecutiveFailures = 0;
+
+    function initSpeechRecognition() {
+      recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'vi-VN';
+
+      recognition.onstart = () => {
+        isRecording = true;
+        updateRecordButton(true);
+      };
+
+      recognition.onresult = (event) => {
+        let final = '';
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+        document.getElementById('transcript').innerHTML = final +
+          (interim ? `<span class="interim"><br><i>${interim}</i></span>` : '');
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Recognition error:', event.error);
+        document.getElementById('transcript').innerHTML +=
+          `<div class="error-message">Lỗi: ${event.error}</div>`;
+      };
+
+      recognition.onend = () => {
+        isRecording = false;
+        updateRecordButton(false);
+      };
+    }
+
+    function updateRecordButton(recording) {
+      const btn = document.getElementById('record-btn');
+      if (recording) {
+        btn.innerHTML = `
+          <svg class="mic-icon" viewBox="0 0 24 24" width="24" height="24">
+            <path fill="currentColor"
+              d="M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z" />
+          </svg>
+          Đang ghi âm...
+        `;
+        btn.classList.add('recording');
       } else {
-        msg.textContent = 'Hoàn thành';
-        out.textContent = j.transcript;
+        btn.innerHTML = `
+          <svg class="mic-icon" viewBox="0 0 24 24" width="24" height="24">
+            <path fill="currentColor"
+              d="M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z" />
+          </svg>
+          Bắt đầu nói
+        `;
+        btn.classList.remove('recording');
       }
+      btn.disabled = !serverReady && !isRecording;
+    }
+
+    async function checkServerStatus() {
+      try {
+        const start = Date.now();
+        const resp = await fetch('/api/ping', {
+          headers: { 'X-Health-Check': 'true' }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const pingTime = Date.now() - start;
+          updateServerStatus(true,
+            `Ping: ${pingTime}ms | Pool: ${data.recognizer_pool_size} | Threads: ${data.active_threads}`);
+          consecutiveFailures = 0;
+          return true;
+        }
+      } catch (err) {
+        console.error('Ping failed:', err);
+        consecutiveFailures++;
+        updateServerStatus(false, 'Mất kết nối server');
+      }
+      return false;
+    }
+
+    async function wakeUpServer() {
+      try {
+        await fetch('/api/wakeup');
+        console.log('Wake-up successful');
+        return true;
+      } catch (err) {
+        console.error('Wake-up failed:', err);
+        return false;
+      }
+    }
+
+    function updateServerStatus(healthy, message) {
+      const indicator = document.querySelector('#connection-status .status-indicator');
+      const txt = document.getElementById('status-text');
+      const stats = document.getElementById('server-stats');
+
+      if (healthy) {
+        indicator.className = 'status-indicator status-active';
+        txt.textContent = 'Server sẵn sàng';
+        stats.textContent = message;
+        serverReady = true;
+      } else {
+        indicator.className = 'status-indicator status-inactive';
+        txt.textContent = consecutiveFailures > 2 ? 'Đang thử kết nối lại...' : 'Mất kết nối server';
+        stats.textContent = message || 'Ping: -- | Pool: -- | Threads: --';
+        serverReady = false;
+      }
+      document.getElementById('record-btn').disabled = !serverReady && !isRecording;
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      if (!('webkitSpeechRecognition' in window)) {
+        document.getElementById('transcript').innerHTML =
+          '<div class="error-message">Trình duyệt không hỗ trợ Web Speech API</div>';
+        return;
+      }
+
+      initSpeechRecognition();
+      await checkServerStatus();
+
+      // Ping định kỳ mỗi 5 phút
+      pingIntervalId = setInterval(checkServerStatus, PING_INTERVAL);
+      // Wake-up server mỗi 29 phút
+      wakeupIntervalId = setInterval(wakeUpServer, WAKEUP_INTERVAL);
+
+      document.getElementById('record-btn').addEventListener('click', async () => {
+        if (isRecording) {
+          recognition.stop();
+        } else {
+          if (!serverReady) {
+            document.getElementById('transcript').textContent = 'Đang kiểm tra server...';
+            const ok = await checkServerStatus();
+            if (!ok) return;
+          }
+          recognition.start();
+        }
+      });
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (pingIntervalId) clearInterval(pingIntervalId);
+      if (wakeupIntervalId) clearInterval(wakeupIntervalId);
+      if (recognition && isRecording) recognition.stop();
     });
   </script>
 </body>
